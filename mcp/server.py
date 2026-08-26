@@ -91,7 +91,11 @@ def _ensure_db() -> sqlite3.Connection:
                 with open(stamp, "w") as f:
                     f.write(remote)
     if _db is None:
-        db = sqlite3.connect(_db_path())
+        # The MCP framework runs tool calls on varying worker threads while we
+        # cache one connection globally — the default check_same_thread=True
+        # made every call fail permanently once the creating thread was gone.
+        # Read-only use on a serialized-threadsafety build, so sharing is safe.
+        db = sqlite3.connect(_db_path(), check_same_thread=False)
         db.enable_load_extension(True)
         import sqlite_vec
         sqlite_vec.load(db)
