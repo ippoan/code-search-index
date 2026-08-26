@@ -33,15 +33,36 @@ REFRESH_SECONDS = int(os.environ.get("CODE_INDEX_REFRESH_SECONDS", "21600"))
 DIMS = 768
 MODEL_NAME = "jinaai/jina-embeddings-v2-base-code"
 
+DUP_ASSET = "dup-pairs.json"
+
 mcp = FastMCP("code-search")
 
 _model = None
 _db: sqlite3.Connection | None = None
 _last_check = 0.0
+_dup_map: dict[str, list] | None = None
 
 
 def _db_path() -> str:
     return os.path.join(CACHE_DIR, "code-index.db")
+
+
+def _dup_path() -> str:
+    return os.path.join(CACHE_DIR, DUP_ASSET)
+
+
+def _load_dup_map() -> dict[str, list]:
+    """file -> [(other_file, n_chunks, max_sim)] from the duplicate ledger
+    published next to the DB (built by indexer/dedup.py in CI)."""
+    out: dict[str, list] = {}
+    try:
+        with open(_dup_path()) as f:
+            for p in json.load(f):
+                out.setdefault(p["a"], []).append((p["b"], p["n"], p["max_sim"]))
+                out.setdefault(p["b"], []).append((p["a"], p["n"], p["max_sim"]))
+    except Exception:
+        pass  # ledger is optional — search works without warnings
+    return out
 
 
 def _remote_updated_at() -> str | None:
@@ -68,6 +89,16 @@ def _download() -> None:
         shutil.copyfileobj(src, dst)
     os.remove(tmp_gz)
     os.replace(tmp_db, _db_path())
+    # duplicate ledger rides along with the DB; failure is non-fatal
+    try:
+        dup_url = (f"https://github.com/{ORG}/{REPO}/releases/download/"
+                   f"{RELEASE_TAG}/{DUP_ASSET}")
+        tmp = _dup_path() + ".tmp"
+        with urllib.request.urlopen(dup_url, timeout=60) as resp, open(tmp, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        os.replace(tmp, _dup_path())
+    except Exception:
+        pass
 
 
 def _ensure_db() -> sqlite3.Connection:
@@ -85,6 +116,8 @@ def _ensure_db() -> sqlite3.Connection:
             if _db is not None:
                 _db.close()
                 _db = None
+            global _dup_map
+            _dup_map = None  # reload the ledger with the new DB
             _download()
             if remote:
                 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -138,13 +171,20 @@ def semantic_code_search(query: str, k: int = 8, repo: str = "") -> str:
         rows = [r for r in rows if r[0] == repo][:k]
     if not rows:
         return "no results"
+    global _dup_map
+    if _dup_map is None:
+        _dup_map = _load_dup_map()
     out = []
     for r, path, start, end, symbol, lang, text, dist in rows:
         head = f"## {r}/{path}:{start}-{end}"
         if symbol:
             head += f"  ({symbol})"
+        block = f"{head}  [dist {dist:.3f}]"
+        for other, n, sim in _dup_map.get(f"{r}/{path}", []):
+            block += (f"\n⚠ near-duplicate: このファイルは {other} と"
+                      f"ほぼ同一の実装を含む (chunks {n}, sim {sim})")
         snippet = "\n".join(text.split("\n")[:25])
-        out.append(f"{head}  [dist {dist:.3f}]\n```{lang}\n{snippet}\n```")
+        out.append(f"{block}\n```{lang}\n{snippet}\n```")
     updated = db.execute("SELECT value FROM meta WHERE key='updated_at'").fetchone()
     out.append(f"index updated_at: {updated[0] if updated else 'unknown'}")
     return "\n\n".join(out)

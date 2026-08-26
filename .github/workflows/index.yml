@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: index
@@ -98,3 +99,21 @@ jobs:
               --notes "Auto-built semantic code search index (sqlite-vec, jina-embeddings-v2-base-code)"
           gh release upload index code-index.db.gz --clobber
           gh release delete index-checkpoint --yes --cleanup-tag 2>/dev/null || true
+
+      # 重複検索: repo 横断の near-duplicate ペアを毎回集計し、前回台帳との
+      # 差分 (新規ペア) があった時だけ issue を 1 本起票する。台帳は Release
+      # asset `dup-pairs.json`。初回は台帳作成のみで issue は出ない。
+      - name: Duplicate-code report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download index -p dup-pairs.json -O baseline.json 2>/dev/null || \
+            echo "no baseline yet"
+          python -m indexer.dedup --db code-index.db --out dup-pairs.json \
+            --baseline baseline.json --new-out new-pairs.json --new-md new-pairs.md
+          gh release upload index dup-pairs.json --clobber
+          if [ -s new-pairs.md ]; then
+            gh issue create \
+              --title "新しいコード重複を検出 ($(date -u +%Y-%m-%d))" \
+              --body-file new-pairs.md
+          fi
