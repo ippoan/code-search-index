@@ -14,6 +14,11 @@ import time
 
 from . import chunker, db as dbm, gitsync
 
+# Embed only the head of each chunk: CPU attention cost/memory grows
+# quadratically with sequence length, and full 8000-char chunks killed a
+# 16GB Actions runner. The full text is still stored in the DB for display.
+EMBED_MAX_CHARS = 2000
+
 
 def parse_args(argv):
     ap = argparse.ArgumentParser()
@@ -22,7 +27,7 @@ def parse_args(argv):
     ap.add_argument("--workdir", default=".repos")
     ap.add_argument("--full", action="store_true", help="ignore previous state, rebuild all")
     ap.add_argument("--only", default="", help="comma-separated repo names")
-    ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--batch-size", type=int, default=8)
     return ap.parse_args(argv)
 
 
@@ -99,14 +104,14 @@ def main(argv=None) -> int:
         from fastembed import TextEmbedding
         cache_dir = os.environ.get("FASTEMBED_CACHE") or os.path.expanduser("~/.cache/fastembed")
         model = TextEmbedding(dbm.MODEL_NAME, cache_dir=cache_dir)
-        texts = [f"{repo}/{path}\n{ch.text}" for repo, path, ch, _ in pending]
+        texts = [f"{repo}/{path}\n{ch.text[:EMBED_MAX_CHARS]}" for repo, path, ch, _ in pending]
         t0, done = time.time(), 0
         for (repo, path, ch, lang), vec in zip(
             pending, model.embed(texts, batch_size=args.batch_size)
         ):
             dbm.insert_chunk(db, repo, path, ch, lang, vec)
             done += 1
-            if done % 2000 == 0:
+            if done % 500 == 0:
                 rate = done / (time.time() - t0)
                 print(f"  embedded {done}/{len(pending)} ({rate:.0f}/s)", flush=True)
                 db.commit()
