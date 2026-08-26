@@ -55,6 +55,17 @@ def sync_repo(workdir: str, org: str, name: str) -> str:
     return _git(path, "rev-parse", "HEAD")
 
 
+def checkout_sha(workdir: str, name: str, sha: str) -> None:
+    """Pin the working tree to a specific commit (shard builds share one
+    shas file so every shard slices the exact same tree)."""
+    path = os.path.join(workdir, name)
+    try:
+        _git(path, "cat-file", "-e", f"{sha}^{{commit}}")
+    except subprocess.CalledProcessError:
+        _git(path, "fetch", "--quiet", "origin", sha)
+    _git(path, "reset", "--hard", "--quiet", sha)
+
+
 def changed_files(workdir: str, name: str, old: str, new: str) -> list[tuple[str, str]] | None:
     """[(status, path)] between old..new, or None if old is unknown (full reindex)."""
     path = os.path.join(workdir, name)

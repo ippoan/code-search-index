@@ -1,0 +1,128 @@
+name: full-rebuild
+
+# Sharded full build: N short parallel jobs, each embedding every n-th chunk
+# of every repo, merged into one DB at the end. Structurally robust against
+# runner VM deaths — a failed shard is just re-run (rerun-failed-jobs), and
+# no 3-hour serial run can die at hour 2. Use for the initial build, after
+# an embedding-model change, or to recover a broken index. Daily increments
+# stay on the serial `index` workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: "Number of parallel shard jobs"
+        type: number
+        default: 16
+
+permissions:
+  contents: write
+
+# Shares the group with index.yml so a daily incremental run cannot clobber
+# the release while a full rebuild is in flight.
+concurrency:
+  group: index
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      shas: ${{ steps.plan.outputs.shas }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHARDS: ${{ inputs.shards }}
+        run: |
+          python3 -m indexer.plan --org ippoan --out shas.json
+          echo "shas=$(cat shas.json | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(python3 -c "import os,json; print(json.dumps(list(range(int(os.environ['SHARDS'])))))")" >> "$GITHUB_OUTPUT"
+
+  embed:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-jina-embeddings-v2-base-code-v1
+
+      - name: Build shard
+        env:
+          FASTEMBED_CACHE: /home/runner/.cache/fastembed
+          SHAS: ${{ needs.plan.outputs.shas }}
+        run: |
+          printf '%s' "$SHAS" > shas.json
+          python -m indexer.shard --org ippoan --db shard.db \
+            --shard ${{ matrix.shard }}/${{ strategy.job-total }} --shas shas.json
+          gzip -f shard.db
+          mv shard.db.gz shard-${{ matrix.shard }}.db.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shard-db-${{ matrix.shard }}
+          path: shard-${{ matrix.shard }}.db.gz
+          retention-days: 3
+
+  merge:
+    needs: embed
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shard-db-*
+          path: shards
+          merge-multiple: true
+
+      - name: Merge shards
+        run: |
+          gunzip -f shards/*.db.gz
+          python -m indexer.merge --out code-index.db shards/*.db
+          gzip -kf code-index.db
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-index-db
+          path: code-index.db.gz
+          retention-days: 14
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view index >/dev/null 2>&1 || \
+            gh release create index --title "code search index" \
+              --notes "Auto-built semantic code search index (sqlite-vec, jina-embeddings-v2-base-code)"
+          gh release upload index code-index.db.gz --clobber
+          gh release delete index-checkpoint --yes --cleanup-tag 2>/dev/null || true
