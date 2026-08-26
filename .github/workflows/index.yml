@@ -42,32 +42,47 @@ jobs:
           path: ~/.cache/fastembed
           key: fastembed-jina-embeddings-v2-base-code-v1
 
-      - name: Download previous index
+      - name: Download previous index (checkpoint preferred)
         if: ${{ inputs.full_rebuild != true }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release download index -p code-index.db.gz -O code-index.db.gz 2>/dev/null; then
-            gunzip -f code-index.db.gz
+          if gh release download index-checkpoint -p code-index.db.gz -O code-index.db.gz 2>/dev/null; then
+            echo "resuming from interrupted-build checkpoint"
+          elif gh release download index -p code-index.db.gz -O code-index.db.gz 2>/dev/null; then
             echo "previous index downloaded"
           else
             echo "no previous index — full build"
           fi
+          if [ -f code-index.db.gz ]; then gunzip -f code-index.db.gz; fi
 
       - name: Build index
         env:
           GH_TOKEN: ${{ github.token }}
           FASTEMBED_CACHE: /home/runner/.cache/fastembed
         run: |
-          FLAGS=""
-          [ "${{ inputs.full_rebuild }}" = "true" ] && FLAGS="--full"
+          FLAGS="--checkpoint"
+          [ "${{ inputs.full_rebuild }}" = "true" ] && FLAGS="$FLAGS --full"
           [ -n "${{ inputs.only }}" ] && FLAGS="$FLAGS --only ${{ inputs.only }}"
           python -m indexer --org ippoan --db code-index.db $FLAGS
 
+      - name: Save checkpoint on failure
+        if: ${{ failure() && hashFiles('code-index.db') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gzip -kf code-index.db
+          gh release view index-checkpoint >/dev/null 2>&1 || \
+            gh release create index-checkpoint --title "index checkpoint (in-progress build)" \
+              --notes "Partial index saved so an interrupted build can resume."
+          gh release upload index-checkpoint code-index.db.gz --clobber
+
       - name: Compress
+        if: ${{ always() && hashFiles('code-index.db') != '' }}
         run: gzip -kf code-index.db
 
       - name: Upload artifact copy
+        if: ${{ always() && hashFiles('code-index.db.gz') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: code-index-db
@@ -82,3 +97,4 @@ jobs:
             gh release create index --title "code search index" \
               --notes "Auto-built semantic code search index (sqlite-vec, jina-embeddings-v2-base-code)"
           gh release upload index code-index.db.gz --clobber
+          gh release delete index-checkpoint --yes --cleanup-tag 2>/dev/null || true
