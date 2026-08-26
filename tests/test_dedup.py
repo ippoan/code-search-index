@@ -13,14 +13,13 @@ def test_find_pairs_cross_repo_only():
         ("org/r1", "src/a.rs", 1, "dup_fn"),
         ("org/r2", "src/b.rs", 1, "dup_fn_copy"),
         ("org/r1", "src/c.rs", 1, "unrelated"),
-        ("org/r1", "src/a2.rs", 1, "same_repo_twin"),
+        ("org/r1", "src/c2.rs", 1, "same_repo_twin"),
     ]
-    base = [1.0, 0.0, 0.0, 0.0]
     V = np.vstack([
-        _unit(base),
+        _unit([1.0, 0.0, 0.0, 0.0]),
         _unit([0.999, 0.01, 0.0, 0.0]),   # near-identical, other repo -> pair
         _unit([0.0, 1.0, 0.0, 0.0]),      # orthogonal -> no pair
-        _unit(base),                       # identical but same repo -> masked
+        _unit([0.0, 1.0, 0.0, 0.0]),      # identical to c.rs but same repo -> masked
     ])
     pairs = dedup.find_pairs(meta, V, threshold=0.93)
     assert len(pairs) == 1
