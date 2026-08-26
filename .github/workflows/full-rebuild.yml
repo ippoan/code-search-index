@@ -31,6 +31,7 @@ jobs:
     outputs:
       shas: ${{ steps.plan.outputs.shas }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      shas_hash: ${{ steps.plan.outputs.shas_hash }}
     steps:
       - uses: actions/checkout@v4
       - id: plan
@@ -40,6 +41,7 @@ jobs:
         run: |
           python3 -m indexer.plan --org ippoan,ohishi-exp --out shas.json
           echo "shas=$(cat shas.json | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "shas_hash=$(sha256sum shas.json | cut -c1-16)" >> "$GITHUB_OUTPUT"
           echo "matrix=$(python3 -c "import os,json; print(json.dumps(list(range(int(os.environ['SHARDS'])))))")" >> "$GITHUB_OUTPUT"
 
   embed:
@@ -67,6 +69,15 @@ jobs:
           path: ~/.cache/fastembed
           key: fastembed-jina-embeddings-v2-base-code-v1
 
+      # Read-only: the merge job of a successful build saves these. Bump the
+      # `caches-v1` prefix when chunker.py's output changes shape.
+      - name: Restore build caches
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: caches-v1-${{ needs.plan.outputs.shas_hash }}
+          restore-keys: caches-v1-
+
       - name: Build shard
         env:
           FASTEMBED_CACHE: /home/runner/.cache/fastembed
@@ -74,7 +85,8 @@ jobs:
         run: |
           printf '%s' "$SHAS" > shas.json
           python -m indexer.shard --db shard.db \
-            --shard ${{ matrix.shard }}/${{ strategy.job-total }} --shas shas.json
+            --shard ${{ matrix.shard }}/${{ strategy.job-total }} --shas shas.json \
+            --chunk-cache .cache/chunks.json.gz --vector-cache .cache/vectors.db
           gzip -f shard.db
           mv shard.db.gz shard-${{ matrix.shard }}.db.gz
 
@@ -85,7 +97,7 @@ jobs:
           retention-days: 3
 
   merge:
-    needs: embed
+    needs: [plan, embed]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -110,6 +122,15 @@ jobs:
           gunzip -f shards/*.db.gz
           python -m indexer.merge --out code-index.db shards/*.db
           gzip -kf code-index.db
+
+      - name: Generate build caches
+        run: python -m indexer.caches --db code-index.db --chunks .cache/chunks.json.gz --vectors .cache/vectors.db
+
+      - name: Save build caches
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: caches-v1-${{ needs.plan.outputs.shas_hash }}
 
       - uses: actions/upload-artifact@v4
         with:

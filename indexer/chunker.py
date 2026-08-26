@@ -12,6 +12,10 @@ from dataclasses import dataclass
 
 MAX_CHUNK_LINES = 250
 MAX_CHUNK_BYTES = 8000
+# Embed only the head of each chunk: CPU attention cost/memory grows
+# quadratically with sequence length (full 8000-char chunks killed a 16GB
+# Actions runner). The stored text stays full.
+EMBED_MAX_CHARS = 2000
 WINDOW_LINES = 80
 WINDOW_OVERLAP = 15
 MIN_CONTENT_LINES = 3
@@ -171,3 +175,10 @@ def chunk_file(text: str, ext: str) -> list[Chunk]:
 
 def chunk_lang(ext: str) -> str:
     return LANG_BY_EXT.get(ext, "")
+
+
+def embed_text(repo: str, path: str, text: str) -> str:
+    """Deterministic embedding input for one chunk. Must stay identical
+    across the incremental indexer, shard builds, and the vector cache
+    (indexer/caches.py keys on it) — change it only with a full rebuild."""
+    return f"{repo}/{path}\n{text[:EMBED_MAX_CHARS]}"
