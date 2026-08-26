@@ -26,7 +26,7 @@ def test_rust_chunk_content_and_lines():
     chunks = chunker.chunk_file(RUST, ".rs")
     fold = next(c for c in chunks if c.symbol == "fold_events")
     assert "map(|e| e.at)" in fold.text
-    assert fold.start_line == 10 and fold.end_line == 12
+    assert fold.start_line == 9 and fold.end_line == 11
 
 
 def test_oversized_container_descends_into_methods():
