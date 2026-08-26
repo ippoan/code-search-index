@@ -93,6 +93,9 @@ def parse_args(argv):
                     help="periodically upload the DB to the checkpoint release")
     ap.add_argument("--checkpoint-interval", type=int, default=600,
                     help="seconds between checkpoint uploads")
+    ap.add_argument("--parallel-threshold", type=int, default=1000,
+                    help="use all CPU cores (worker processes) when a repo has "
+                         "at least this many chunks; 0 disables parallelism")
     return ap.parse_args(argv)
 
 
@@ -174,9 +177,16 @@ def main(argv=None) -> int:
             print(f"[{name}] embedding {len(pending)} chunks", flush=True)
             texts = [f"{name}/{path}\n{ch.text[:EMBED_MAX_CHARS]}"
                      for path, ch, _ in pending]
+            # parallel=0 -> data-parallel worker processes on all cores;
+            # single-process embedding measured only ~2 chunks/s on a
+            # 4-core runner, which cannot finish a full build in one job.
+            # Workers are only worth their startup cost for big repos.
+            parallel = 0 if (args.parallel_threshold
+                             and len(pending) >= args.parallel_threshold) else None
             done, t0 = 0, time.time()
             for (path, ch, lang), vec in zip(
-                pending, get_model().embed(texts, batch_size=args.batch_size)
+                pending,
+                get_model().embed(texts, batch_size=args.batch_size, parallel=parallel),
             ):
                 dbm.insert_chunk(db, name, path, ch, lang, vec)
                 done += 1
