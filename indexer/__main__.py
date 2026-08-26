@@ -24,10 +24,6 @@ import time
 
 from . import chunker, db as dbm, gitsync
 
-# Embed only the head of each chunk: CPU attention cost/memory grows
-# quadratically with sequence length, and full 8000-char chunks killed a
-# 16GB Actions runner. The full text is still stored in the DB for display.
-EMBED_MAX_CHARS = 2000
 CHECKPOINT_RELEASE = "index-checkpoint"
 
 _model = None
@@ -233,7 +229,7 @@ def main(argv=None) -> int:
             note = f" (resuming at {resume_from})" if resume_from else ""
             print(f"[{name}] embedding {len(todo)}/{len(pending)} chunks{note}",
                   flush=True)
-            texts = [f"{name}/{path}\n{ch.text[:EMBED_MAX_CHARS]}"
+            texts = [chunker.embed_text(name, path, ch.text)
                      for path, ch, _ in todo]
             # Data-parallel worker processes for big repos: single-process
             # embedding measured only ~2 chunks/s on a 4-core runner (cannot
