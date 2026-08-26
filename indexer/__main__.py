@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import gzip
+import json
 import os
 import shutil
 import subprocess
@@ -94,24 +95,52 @@ def parse_args(argv):
     ap.add_argument("--checkpoint-interval", type=int, default=600,
                     help="seconds between checkpoint uploads")
     ap.add_argument("--parallel-threshold", type=int, default=1000,
-                    help="use all CPU cores (worker processes) when a repo has "
-                         "at least this many chunks; 0 disables parallelism")
+                    help="use worker processes when a repo has at least this "
+                         "many chunks; 0 disables parallelism")
+    ap.add_argument("--workers", type=int, default=2,
+                    help="worker processes for big repos (0 = all cores). "
+                         "4 workers exhausted the 16GB runner; default 2")
     return ap.parse_args(argv)
 
 
-def collect_repo_work(db, args, name: str) -> tuple[str, list] | None:
-    """Sync one repo; returns (head_sha, pending_chunks) or None to skip."""
+def get_partial(db, repo: str) -> dict | None:
+    row = db.execute(
+        "SELECT value FROM meta WHERE key=?", (f"partial:{repo}",)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def set_partial(db, repo: str, head: str, done: int, total: int):
+    dbm.set_meta(db, f"partial:{repo}",
+                 json.dumps({"head": head, "done": done, "total": total}))
+
+
+def clear_partial(db, repo: str):
+    db.execute("DELETE FROM meta WHERE key=?", (f"partial:{repo}",))
+
+
+def collect_repo_work(db, args, name: str) -> tuple[str, list, int] | None:
+    """Sync one repo; returns (head_sha, pending_chunks, resume_from) or None.
+
+    resume_from > 0 means the first resume_from chunks of `pending` are already
+    inserted by a previous interrupted run on the same commit (chunk order is
+    deterministic: sorted ls-files x deterministic chunker) and must be skipped.
+    """
     head = gitsync.sync_repo(args.workdir, args.org, name)
     old = dbm.get_repo_commit(db, name)
     if old == head:
+        clear_partial(db, name)
         return None
 
     changed = None
     if old is not None:
         changed = gitsync.changed_files(args.workdir, name, old, head)
 
+    partial = get_partial(db, name)
+    resume = (changed is None and partial is not None
+              and partial.get("head") == head)
     if changed is None:
-        dbm.delete_repo(db, name)
+        if not resume:
+            dbm.delete_repo(db, name)
         files = [(p, "A") for p in gitsync.list_files(args.workdir, name)]
         mode = "full"
     else:
@@ -136,7 +165,16 @@ def collect_repo_work(db, args, name: str) -> tuple[str, list] | None:
             continue
         for ch in chunker.chunk_file(text, ext):
             pending.append((path, ch, lang))
-    return head, pending
+
+    resume_from = 0
+    if resume:
+        if partial.get("total") == len(pending) and 0 < partial.get("done", 0) <= len(pending):
+            resume_from = partial["done"]
+        else:
+            # chunking no longer matches the recorded progress — start over
+            dbm.delete_repo(db, name)
+            clear_partial(db, name)
+    return head, pending, resume_from
 
 
 def main(argv=None) -> int:
@@ -171,35 +209,42 @@ def main(argv=None) -> int:
             continue
         if work is None:
             continue
-        head, pending = work
+        head, pending, resume_from = work
+        todo = pending[resume_from:]
 
-        if pending:
-            print(f"[{name}] embedding {len(pending)} chunks", flush=True)
+        if todo:
+            note = f" (resuming at {resume_from})" if resume_from else ""
+            print(f"[{name}] embedding {len(todo)}/{len(pending)} chunks{note}",
+                  flush=True)
             texts = [f"{name}/{path}\n{ch.text[:EMBED_MAX_CHARS]}"
-                     for path, ch, _ in pending]
-            # parallel=0 -> data-parallel worker processes on all cores;
-            # single-process embedding measured only ~2 chunks/s on a
-            # 4-core runner, which cannot finish a full build in one job.
-            # Workers are only worth their startup cost for big repos.
-            parallel = 0 if (args.parallel_threshold
-                             and len(pending) >= args.parallel_threshold) else None
+                     for path, ch, _ in todo]
+            # Data-parallel worker processes for big repos: single-process
+            # embedding measured only ~2 chunks/s on a 4-core runner (cannot
+            # finish a full build in one job), while all-cores workers (4)
+            # exhausted the 16GB runner VM. Small repos skip the startup cost.
+            parallel = (args.workers if (args.parallel_threshold
+                        and len(todo) >= args.parallel_threshold) else None)
             done, t0 = 0, time.time()
             for (path, ch, lang), vec in zip(
-                pending,
+                todo,
                 get_model().embed(texts, batch_size=args.batch_size, parallel=parallel),
             ):
                 dbm.insert_chunk(db, name, path, ch, lang, vec)
                 done += 1
                 if done % 500 == 0:
                     rate = done / (time.time() - t0)
-                    print(f"  [{name}] {done}/{len(pending)} ({rate:.0f}/s)",
-                          flush=True)
+                    print(f"  [{name}] {resume_from + done}/{len(pending)} "
+                          f"({rate:.0f}/s)", flush=True)
+                    # record intra-repo progress so an interrupted run resumes
+                    # this repo from here instead of redoing it from scratch
+                    set_partial(db, name, head, resume_from + done, len(pending))
                     db.commit()
                     ckpt.maybe(db)
-            stats["chunks_added"] += len(pending)
+            stats["chunks_added"] += len(todo)
 
         # repo is complete only once its commit is recorded — crash before
-        # this line makes the next run redo the repo from its previous state
+        # this line makes the next run resume the repo from its partial marker
+        clear_partial(db, name)
         dbm.set_repo_commit(db, name, head, now)
         db.commit()
         ckpt.maybe(db)
