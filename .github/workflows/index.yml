@@ -64,7 +64,7 @@ jobs:
           FLAGS="--checkpoint"
           [ "${{ inputs.full_rebuild }}" = "true" ] && FLAGS="$FLAGS --full"
           [ -n "${{ inputs.only }}" ] && FLAGS="$FLAGS --only ${{ inputs.only }}"
-          python -m indexer --org ippoan --db code-index.db $FLAGS
+          python -m indexer --org ippoan,ohishi-exp --db code-index.db $FLAGS
 
       - name: Save checkpoint on failure
         if: ${{ failure() && hashFiles('code-index.db') != '' }}

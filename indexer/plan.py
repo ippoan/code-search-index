@@ -4,7 +4,7 @@ Pins every public repo's default-branch HEAD so all N shard jobs slice the
 exact same trees. Stdlib only (runs before pip install if needed).
 
 Usage:
-  python -m indexer.plan --org ippoan --out shas.json
+  python -m indexer.plan --org ippoan,ohishi-exp --out shas.json
 """
 from __future__ import annotations
 
@@ -29,15 +29,20 @@ def _api(path: str):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--org", required=True)
+    ap.add_argument("--org", required=True,
+                    help="comma-separated GitHub orgs")
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
 
     shas: dict[str, str] = {}
-    for name in list_public_repos(args.org):
-        repo = _api(f"/repos/{args.org}/{name}")
-        commit = _api(f"/repos/{args.org}/{name}/commits/{repo['default_branch']}")
-        shas[name] = commit["sha"]
+    for org in args.org.split(","):
+        if not org:
+            continue
+        for name in list_public_repos(org):
+            slug = f"{org}/{name}"
+            repo = _api(f"/repos/{slug}")
+            commit = _api(f"/repos/{slug}/commits/{repo['default_branch']}")
+            shas[slug] = commit["sha"]
     with open(args.out, "w") as f:
         json.dump(shas, f, indent=0, sort_keys=True)
     print(f"{len(shas)} repos pinned -> {args.out}", flush=True)

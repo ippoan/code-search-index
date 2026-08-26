@@ -40,10 +40,12 @@ def _git(cwd: str, *args: str) -> str:
     ).stdout.strip()
 
 
-def sync_repo(workdir: str, org: str, name: str) -> str:
-    """Clone or update the repo; returns HEAD sha of the default branch."""
-    path = os.path.join(workdir, name)
-    url = f"https://github.com/{org}/{name}.git"
+def sync_repo(workdir: str, slug: str) -> str:
+    """Clone or update the repo (slug = "org/name"); returns HEAD sha of the
+    default branch. All repo identifiers are org-qualified slugs so multiple
+    orgs can share one index without name collisions."""
+    path = os.path.join(workdir, slug)
+    url = f"https://github.com/{slug}.git"
     if os.path.isdir(os.path.join(path, ".git")):
         _git(path, "fetch", "--quiet", "origin")
         _git(path, "reset", "--hard", "--quiet", "origin/HEAD")
