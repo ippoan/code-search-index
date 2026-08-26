@@ -18,7 +18,10 @@ import struct
 import time
 import urllib.request
 
-from mcp.server.fastmcp import FastMCP
+try:  # mcp >= 2 renamed FastMCP to MCPServer (same tool()/run() surface)
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP
 
 ORG = os.environ.get("CODE_INDEX_ORG", "ippoan")
 REPO = os.environ.get("CODE_INDEX_REPO", "code-search-index")
