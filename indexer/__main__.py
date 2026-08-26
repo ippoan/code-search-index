@@ -1,7 +1,7 @@
 """Build / incrementally update the code search index.
 
 Usage:
-  python -m indexer --org ippoan --db code-index.db [--workdir .repos]
+  python -m indexer --org ippoan,ohishi-exp --db code-index.db [--workdir .repos]
                     [--full] [--only repo1,repo2] [--checkpoint]
 
 Work is repo-atomic: each repo is chunked, embedded, inserted and its commit
@@ -84,7 +84,8 @@ class Checkpointer:
 
 def parse_args(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--org", required=True)
+    ap.add_argument("--org", required=True,
+                    help="comma-separated GitHub orgs; repos are keyed org/name")
     ap.add_argument("--db", default="code-index.db")
     ap.add_argument("--workdir", default=".repos")
     ap.add_argument("--full", action="store_true", help="ignore previous state, rebuild all")
@@ -125,7 +126,7 @@ def collect_repo_work(db, args, name: str) -> tuple[str, list, int] | None:
     inserted by a previous interrupted run on the same commit (chunk order is
     deterministic: sorted ls-files x deterministic chunker) and must be skipped.
     """
-    head = gitsync.sync_repo(args.workdir, args.org, name)
+    head = gitsync.sync_repo(args.workdir, name)
     old = dbm.get_repo_commit(db, name)
     if old == head:
         clear_partial(db, name)
@@ -191,11 +192,27 @@ def main(argv=None) -> int:
         db = dbm.open_db(args.db)
     dbm.set_meta(db, "model", dbm.MODEL_NAME)
 
-    repos = gitsync.list_public_repos(args.org)
+    repos = sorted(
+        f"{org}/{n}"
+        for org in args.org.split(",") if org
+        for n in gitsync.list_public_repos(org)
+    )
     if args.only:
         only = set(args.only.split(","))
         repos = [r for r in repos if r in only]
     print(f"{len(repos)} repos to consider", flush=True)
+
+    # Drop repos that are no longer listed (deleted / renamed / org removed).
+    # Also migrates pre-multi-org DBs whose keys were bare names.
+    if not args.only:
+        known = set(repos)
+        for (stale,) in db.execute("SELECT repo FROM repos").fetchall():
+            if stale not in known:
+                print(f"[{stale}] no longer listed -> removing", flush=True)
+                dbm.delete_repo(db, stale)
+                db.execute("DELETE FROM repos WHERE repo=?", (stale,))
+                clear_partial(db, stale)
+        db.commit()
 
     ckpt = Checkpointer(args.db, args.checkpoint, args.checkpoint_interval)
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")

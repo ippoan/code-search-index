@@ -38,7 +38,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHARDS: ${{ inputs.shards }}
         run: |
-          python3 -m indexer.plan --org ippoan --out shas.json
+          python3 -m indexer.plan --org ippoan,ohishi-exp --out shas.json
           echo "shas=$(cat shas.json | tr -d '\n')" >> "$GITHUB_OUTPUT"
           echo "matrix=$(python3 -c "import os,json; print(json.dumps(list(range(int(os.environ['SHARDS'])))))")" >> "$GITHUB_OUTPUT"
 
@@ -73,7 +73,7 @@ jobs:
           SHAS: ${{ needs.plan.outputs.shas }}
         run: |
           printf '%s' "$SHAS" > shas.json
-          python -m indexer.shard --org ippoan --db shard.db \
+          python -m indexer.shard --db shard.db \
             --shard ${{ matrix.shard }}/${{ strategy.job-total }} --shas shas.json
           gzip -f shard.db
           mv shard.db.gz shard-${{ matrix.shard }}.db.gz

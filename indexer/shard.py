@@ -6,7 +6,7 @@ planning or coordination needed. Shards are short-lived and stateless: a
 failed shard is simply re-run; indexer.merge combines the shard DBs.
 
 Usage:
-  python -m indexer.shard --org ippoan --shard 3/16 --shas shas.json --db shard.db
+  python -m indexer.shard --shard 3/16 --shas shas.json --db shard.db
 """
 from __future__ import annotations
 
@@ -44,7 +44,6 @@ def collect_full(workdir: str, name: str) -> list:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--org", required=True)
     ap.add_argument("--db", required=True)
     ap.add_argument("--workdir", default=".repos")
     ap.add_argument("--shard", required=True, help="i/n, 0-based (e.g. 3/16)")
@@ -74,7 +73,7 @@ def main(argv=None) -> int:
         sha = shas[name]
         # A shard must cover its stride of every repo — fail loudly (job retry)
         # rather than silently publishing a shard with holes.
-        gitsync.sync_repo(args.workdir, args.org, name)
+        gitsync.sync_repo(args.workdir, name)
         gitsync.checkout_sha(args.workdir, name, sha)
         pending = collect_full(args.workdir, name)
         take = pending[i::n]
