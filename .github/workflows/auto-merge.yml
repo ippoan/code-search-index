@@ -1,0 +1,22 @@
+name: auto-merge
+
+# PR が開いたら native auto-merge を有効化する。branch protection が
+# required check `test` を要求するため、実際の merge は CI green 後。
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge --auto --squash \
+            "${{ github.event.pull_request.number }}" \
+            -R "${{ github.repository }}"
