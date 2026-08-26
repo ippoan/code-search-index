@@ -1,0 +1,84 @@
+name: index
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 03:00 JST daily
+  workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: "Rebuild the whole index from scratch"
+        type: boolean
+        default: false
+      only:
+        description: "Comma-separated repo names (empty = all public repos)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: index
+  cancel-in-progress: false
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-jina-embeddings-v2-base-code-v1
+
+      - name: Download previous index
+        if: ${{ inputs.full_rebuild != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release download index -p code-index.db.gz -O code-index.db.gz 2>/dev/null; then
+            gunzip -f code-index.db.gz
+            echo "previous index downloaded"
+          else
+            echo "no previous index — full build"
+          fi
+
+      - name: Build index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FASTEMBED_CACHE: /home/runner/.cache/fastembed
+        run: |
+          FLAGS=""
+          [ "${{ inputs.full_rebuild }}" = "true" ] && FLAGS="--full"
+          [ -n "${{ inputs.only }}" ] && FLAGS="$FLAGS --only ${{ inputs.only }}"
+          python -m indexer --org ippoan --db code-index.db $FLAGS
+
+      - name: Compress
+        run: gzip -kf code-index.db
+
+      - name: Upload artifact copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-index-db
+          path: code-index.db.gz
+          retention-days: 14
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view index >/dev/null 2>&1 || \
+            gh release create index --title "code search index" \
+              --notes "Auto-built semantic code search index (sqlite-vec, jina-embeddings-v2-base-code)"
+          gh release upload index code-index.db.gz --clobber

@@ -1,0 +1,3 @@
+fastembed>=0.5
+sqlite-vec>=0.1.6
+tree-sitter-language-pack>=0.7
