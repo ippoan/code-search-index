@@ -43,7 +43,7 @@ CALLS_ASSET = "calls.db.gz"
 # putting the repo root on sys.path would shadow the installed `mcp` SDK with
 # this repo's `mcp/` directory. It therefore keeps its own copy of the call
 # lookup, as indexer/search.py records for the vector SQL.
-# --- calls SQL (identical copy in mcp/server.py / indexer/calls.py —
+# --- calls SQL + helpers (identical copy in mcp/server.py / indexer/calls.py —
 #     tests/test_calls.py compares the two blocks as text) ---
 SQL_TARGETS_BY_SYMBOL = """
 SELECT id, repo, name, kind, path, start_line, end_line
@@ -54,12 +54,22 @@ SELECT id, repo, name, kind, path, start_line, end_line
  LIMIT :limit
 """
 
+# A line range also lands inside the module/class that spans the file, whose
+# references are every `use` of it — noise that crowds out the answer. When a
+# range is given, keep only the innermost matches (kind names differ per
+# indexer, so this goes by span, not by kind).
 SQL_TARGETS_BY_PATH = """
 SELECT id, repo, name, kind, path, start_line, end_line
-  FROM symbols
+  FROM symbols s
  WHERE path = :path
    AND (:repo = '' OR repo = :repo)
    AND (:line_to = 0 OR (start_line <= :line_to AND end_line >= :line_from))
+   AND (:line_to = 0 OR NOT EXISTS (
+         SELECT 1 FROM symbols i
+          WHERE i.repo = s.repo AND i.path = s.path
+            AND i.start_line <= :line_to AND i.end_line >= :line_from
+            AND i.start_line >= s.start_line AND i.end_line <= s.end_line
+            AND i.end_line - i.start_line < s.end_line - s.start_line))
  ORDER BY repo, start_line
  LIMIT :limit
 """
@@ -76,9 +86,30 @@ SELECT r.repo, r.path, r.line, r.role, t.name,
  LIMIT :limit
 """
 
+# A call through a trait/interface resolves to the *implemented* member, not to
+# the concrete impl, so the impl itself has no references. These rows join the
+# two: symbol_id = the implemented member, enclosing_symbol_id = the impl.
+SQL_IMPL_TARGETS = """
+SELECT DISTINCT s.id, s.repo, s.name, s.kind, s.path, s.start_line, s.end_line
+  FROM refs r
+  JOIN symbols s ON s.id = r.symbol_id
+ WHERE r.enclosing_symbol_id IN ({ids})
+   AND r.role = 'implementation'
+ ORDER BY s.repo, s.path, s.start_line
+ LIMIT :limit
+"""
+
 SQL_META = "SELECT key, value FROM meta"
 
 SQL_REPOS = "SELECT repo, commit_sha, indexed_at FROM repos ORDER BY repo"
+
+
+def _by_ids(sql: str, ids, limit: int) -> tuple[str, dict]:
+    """Bind an id list into one of the {ids} templates above."""
+    keys = [f"id{i}" for i in range(len(ids))]
+    params: dict[str, object] = {key: i for key, i in zip(keys, ids)}
+    params["limit"] = limit
+    return sql.format(ids=", ".join(":" + key for key in keys)), params
 # --- end calls SQL ---
 
 mcp = FastMCP("code-search")
@@ -291,9 +322,10 @@ def find_callers(symbol: str = "", repo: str = "", path: str = "",
     """Who calls this? Call sites across the indexed public repos.
 
     grep misses calls made through traits/interfaces or a router; this reads a
-    SCIP-derived call graph instead. Pass `symbol` (a function/method/type
-    name) or `path` (repo-relative, plus `lines` like "40-80" to mean "the
-    definitions living there") to see the blast radius before changing code.
+    SCIP-derived call graph instead, following one hop from a concrete impl to
+    the member it implements. Pass `symbol` (a function/method/type name) or
+    `path` (repo-relative, plus `lines` like "40-80" to mean "the definitions
+    living there") to see the blast radius before changing code.
     Optional `repo` is "org/name". Answers carry the commit each repo was
     extracted at, so staleness is visible.
     """
@@ -316,17 +348,20 @@ def find_callers(symbol: str = "", repo: str = "", path: str = "",
                 "line_to": line_to, "limit": max(k, 100)}).fetchall()
         if repo:
             query += f" repo={repo}"
-        touched = {r[1] for r in rows}
         if not rows:
             return (f"{query}: calls.db に一致する定義がありません "
-                    f"(未索引の repo / 名前違い / 索引が古い)\n{_freshness(db, touched)}")
-        keys = [f"id{i}" for i in range(len(rows))]
-        params: dict[str, object] = {key: r[0] for key, r in zip(keys, rows)}
-        params["limit"] = k + 1
-        refs = db.execute(
-            SQL_CALLERS.format(ids=", ".join(":" + key for key in keys)),
-            params,
-        ).fetchall()
+                    f"(未索引の repo / 名前違い / 索引が古い)\n{_freshness(db, set())}")
+        # a call through a trait/interface resolves to the implemented member,
+        # so the concrete impl has no references of its own — follow one hop
+        impl_sql, impl_params = _by_ids(SQL_IMPL_TARGETS, [r[0] for r in rows], 100)
+        known = {r[0] for r in rows}
+        extra = [r for r in db.execute(impl_sql, impl_params).fetchall()
+                 if r[0] not in known]
+        via = {r[0] for r in extra}
+        rows = rows + extra
+        touched = {r[1] for r in rows}
+        sql, params = _by_ids(SQL_CALLERS, [r[0] for r in rows], k + 1)
+        refs = db.execute(sql, params).fetchall()
     except ValueError as e:
         return f"find_callers: {e}"
     except sqlite3.DatabaseError as e:
@@ -347,7 +382,10 @@ def find_callers(symbol: str = "", repo: str = "", path: str = "",
 
     out = [f"# 呼び出し元 {len(callers)}{'+' if truncated else ''} 件 — {query}",
            "## 対象の定義"]
-    out += [f"- {r[1]}/{r[4]}:{r[5]} {r[2]} ({r[3] or 'symbol'})" for r in rows[:10]]
+    out += [f"- {r[1]}/{r[4]}:{r[5]} {r[2]} ({r[3] or 'symbol'})"
+            + ("  ← 実装元 (trait/interface 越しの呼び出しはここに解決される)"
+               if r[0] in via else "")
+            for r in rows[:10]]
     if len(rows) > 10:
         out.append(f"- … ほか {len(rows) - 10} 件")
     out.append("## 呼び出し元")

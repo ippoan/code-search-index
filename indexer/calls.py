@@ -26,7 +26,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 
-# --- calls SQL (identical copy in mcp/server.py / indexer/calls.py —
+# --- calls SQL + helpers (identical copy in mcp/server.py / indexer/calls.py —
 #     tests/test_calls.py compares the two blocks as text) ---
 SQL_TARGETS_BY_SYMBOL = """
 SELECT id, repo, name, kind, path, start_line, end_line
@@ -37,12 +37,22 @@ SELECT id, repo, name, kind, path, start_line, end_line
  LIMIT :limit
 """
 
+# A line range also lands inside the module/class that spans the file, whose
+# references are every `use` of it — noise that crowds out the answer. When a
+# range is given, keep only the innermost matches (kind names differ per
+# indexer, so this goes by span, not by kind).
 SQL_TARGETS_BY_PATH = """
 SELECT id, repo, name, kind, path, start_line, end_line
-  FROM symbols
+  FROM symbols s
  WHERE path = :path
    AND (:repo = '' OR repo = :repo)
    AND (:line_to = 0 OR (start_line <= :line_to AND end_line >= :line_from))
+   AND (:line_to = 0 OR NOT EXISTS (
+         SELECT 1 FROM symbols i
+          WHERE i.repo = s.repo AND i.path = s.path
+            AND i.start_line <= :line_to AND i.end_line >= :line_from
+            AND i.start_line >= s.start_line AND i.end_line <= s.end_line
+            AND i.end_line - i.start_line < s.end_line - s.start_line))
  ORDER BY repo, start_line
  LIMIT :limit
 """
@@ -59,9 +69,30 @@ SELECT r.repo, r.path, r.line, r.role, t.name,
  LIMIT :limit
 """
 
+# A call through a trait/interface resolves to the *implemented* member, not to
+# the concrete impl, so the impl itself has no references. These rows join the
+# two: symbol_id = the implemented member, enclosing_symbol_id = the impl.
+SQL_IMPL_TARGETS = """
+SELECT DISTINCT s.id, s.repo, s.name, s.kind, s.path, s.start_line, s.end_line
+  FROM refs r
+  JOIN symbols s ON s.id = r.symbol_id
+ WHERE r.enclosing_symbol_id IN ({ids})
+   AND r.role = 'implementation'
+ ORDER BY s.repo, s.path, s.start_line
+ LIMIT :limit
+"""
+
 SQL_META = "SELECT key, value FROM meta"
 
 SQL_REPOS = "SELECT repo, commit_sha, indexed_at FROM repos ORDER BY repo"
+
+
+def _by_ids(sql: str, ids, limit: int) -> tuple[str, dict]:
+    """Bind an id list into one of the {ids} templates above."""
+    keys = [f"id{i}" for i in range(len(ids))]
+    params: dict[str, object] = {key: i for key, i in zip(keys, ids)}
+    params["limit"] = limit
+    return sql.format(ids=", ".join(":" + key for key in keys)), params
 # --- end calls SQL ---
 
 DB_NAME = "calls.db"
@@ -83,6 +114,7 @@ class Target:
     path: str
     start_line: int
     end_line: int
+    via_impl: bool = False   # reached by following an implementation row
 
     @property
     def location(self) -> str:
@@ -192,6 +224,22 @@ def find_targets(db: sqlite3.Connection, symbol: str = "", repo: str = "",
     return [Target(*r) for r in rows]
 
 
+def follow_implementations(db: sqlite3.Connection, targets: list[Target],
+                           limit: int = 100) -> list[Target]:
+    """Add the members each target implements.
+
+    A call written against a trait/interface resolves to the *implemented*
+    member, so a concrete impl has no references of its own — asking about it
+    answered "0 callers" while the trait method had 62 (rust-alc-api,
+    R2Backend::download vs StorageBackend::download). One hop fixes that.
+    """
+    sql, params = _by_ids(SQL_IMPL_TARGETS, [t.id for t in targets], limit)
+    known = {t.id for t in targets}
+    return targets + [Target(*row, via_impl=True)
+                      for row in db.execute(sql, params).fetchall()
+                      if row[0] not in known]
+
+
 def find_callers(db: sqlite3.Connection, symbol: str = "", repo: str = "",
                  path: str = "", lines: str = "", k: int = 30) -> Result:
     """Call sites of the definitions matched by `symbol`, or by `path`
@@ -202,14 +250,10 @@ def find_callers(db: sqlite3.Connection, symbol: str = "", repo: str = "",
     fresh = read_freshness(db)
     if not targets:
         return Result((), (), fresh, False)
+    targets = follow_implementations(db, targets)
 
-    keys = [f"id{i}" for i in range(len(targets))]
-    params: dict[str, object] = {key: t.id for key, t in zip(keys, targets)}
-    params["limit"] = k + 1
-    rows = db.execute(
-        SQL_CALLERS.format(ids=", ".join(":" + key for key in keys)),
-        params,
-    ).fetchall()
+    sql, params = _by_ids(SQL_CALLERS, [t.id for t in targets], k + 1)
+    rows = db.execute(sql, params).fetchall()
 
     callers: list[Caller] = []
     seen: set[tuple] = set()
@@ -232,7 +276,10 @@ def format_result(res: Result, query: str) -> str:
                 f"(未索引の repo / 名前違い / 索引がまだ古い)\n{fresh}")
     head = [f"# 呼び出し元 {len(res.callers)}{'+' if res.truncated else ''} 件 — {query}",
             "## 対象の定義"]
-    head += [f"- {t.location} {t.name} ({t.kind or 'symbol'})" for t in res.targets[:10]]
+    head += [f"- {t.location} {t.name} ({t.kind or 'symbol'})"
+             + ("  ← 実装元 (trait/interface 越しの呼び出しはここに解決される)"
+                if t.via_impl else "")
+             for t in res.targets[:10]]
     if len(res.targets) > 10:
         head.append(f"- … ほか {len(res.targets) - 10} 件")
     if not res.callers:
