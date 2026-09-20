@@ -5,6 +5,7 @@ ippoan の **public repo 横断・意味検索(セマンティックコード検
 - 索引: GitHub Actions が日次で全 public repo を diff 駆動で再インデックスし、
   sqlite-vec の DB を [Release `index`](../../releases/tag/index) に publish する
 - 検索: `mcp/server.py` が DB を取得して MCP tool `semantic_code_search` を提供する
+- 呼び出し関係: SCIP 由来の `calls.db` から MCP tool `find_callers` が呼び出し元を列挙する
 - 埋め込みモデル: `jinaai/jina-embeddings-v2-base-code`(768 次元、ONNX/CPU)。
   **索引側とクエリ側は必ず同一モデル**。モデルを変えたら自動で全量再構築される
 
@@ -42,6 +43,36 @@ MCP を介さず手動で最新 DB をローカルへ同期するには:
 ```bash
 ./scripts/sync-db.sh
 ```
+
+同期される asset は 3 本 (`code-index.db.gz` / `dup-pairs.json` / `calls.db.gz`)。
+いずれも Release API の `digest` と突き合わせた **sha256 検証付き**で、合わない
+バイト列は捨てて前回のファイルを維持する。未公開の asset は skip するだけで
+失敗にはしない。`mcp/server.py` も同じ検証を通して同じキャッシュを読む。
+
+## 呼び出し関係 (find_callers)
+
+grep は trait 越し・Router 経由の呼び出しを取りこぼす。`calls.db`
+(Release asset `calls.db.gz`、SCIP 抽出ジョブが生成) を引いて**呼び出し元**を
+列挙する MCP tool が `find_callers`:
+
+```
+find_callers(symbol="resolve_tenant")                  # 定義の名前で
+find_callers(path="src/router.rs", lines="40-80")      # その行にある定義で
+find_callers(symbol="save", repo="ippoan/auth-worker") # 定義を repo で絞る
+```
+
+返すのは呼び出し元の `repo/path:line`・それを囲む定義の名前・role
+(reference / implementation / type_definition)、そして**鮮度**
+(各 repo の `commit_sha` と `meta.updated_at`) — いつ・どの木から作られた答えかを
+必ず添える。MCP tool が遅延ロードで見えないときは同じ検索を CLI から叩ける:
+
+```bash
+python -m indexer.calls --symbol resolve_tenant
+python -m indexer.calls --path indexer/db.py --lines 11-20 --json
+```
+
+`calls.db` がまだ Release に無い間、tool は落ちずに「呼び出し関係の索引が
+まだありません」と返す。
 
 ## 手動再構築
 

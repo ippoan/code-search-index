@@ -5,4 +5,5 @@
 - 埋め込みモデル・`embed_text`・チャンク形状を変えたら full rebuild 必須。cache key の `caches-v1` prefix も bump する。
 - モデル名の正は `indexer/db.py` の `MODEL_NAME`。索引側とクエリ側 (mcp/server.py) は必ず同一モデル。
 - mcp/server.py は mcp 1.x/2.x 両対応 import と `check_same_thread=False` を維持する (どちらも実地で踏んだ)。
+- 呼び出し関係の SQL は `indexer/calls.py` と `mcp/server.py` に**同一テキストで 2 本**持つ (server.py は repo の `mcp/` が pip の mcp SDK を隠すため indexer を import できない)。片方だけ直さないこと — `tests/test_calls.py` がテキスト一致を検査する。
 - 重複検知の台帳は Release asset `dup-pairs.json` (indexer/dedup.py が CI で更新)。閾値や除外は dedup.py の定数が正。
