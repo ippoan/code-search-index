@@ -17,6 +17,7 @@ import os
 import shutil
 import sqlite3
 import struct
+import subprocess
 import sys
 import time
 import urllib.request
@@ -43,8 +44,9 @@ CALLS_ASSET = "calls.db.gz"
 # putting the repo root on sys.path would shadow the installed `mcp` SDK with
 # this repo's `mcp/` directory. It therefore keeps its own copy of the call
 # lookup, as indexer/search.py records for the vector SQL.
-# --- calls SQL + helpers (identical copy in mcp/server.py / indexer/calls.py —
-#     tests/test_calls.py compares the two blocks as text) ---
+# --- shared block: the calls.db SQL, and the few helpers both copies need
+#     (identical copy in mcp/server.py / indexer/calls.py — tests/test_calls.py
+#     compares the two blocks as text, which is what keeps them in step) ---
 SQL_TARGETS_BY_SYMBOL = """
 SELECT id, repo, name, kind, path, start_line, end_line
   FROM symbols
@@ -110,6 +112,43 @@ def _by_ids(sql: str, ids, limit: int) -> tuple[str, dict]:
     params: dict[str, object] = {key: i for key, i in zip(keys, ids)}
     params["limit"] = limit
     return sql.format(ids=", ".join(":" + key for key in keys)), params
+
+
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def head_rev(repo_dir: str) -> str:
+    """The revision checked out at `repo_dir`, or "" when it is not a git
+    checkout. Shelling out rather than reading .git ourselves: it is shorter,
+    and it is right inside a worktree (where .git is a file) and with packed
+    refs — the cases hand-rolled parsing gets wrong. ~5 ms, once per answer.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "-C", repo_dir, "rev-parse", "--short=12", "HEAD"],
+            capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def code_note(started_rev: str, repo_dir: str) -> str:
+    """Which revision of *this code* produced the answer, and whether the
+    checkout has moved past it — a process reads its code once, at startup.
+
+    The index already says how fresh its data is; the code said nothing, which
+    is how this server ran two merges behind without anyone noticing.
+    """
+    if not started_rev:
+        return ""
+    now = head_rev(repo_dir)
+    if now and now != started_rev:
+        return (f"; code @ {started_rev} — 作業ツリーは {now} に進んでいます "
+                "(セッションを開き直すと新しいコードで動きます)")
+    return f"; code @ {started_rev}"
+
+
+STARTED_REV = head_rev(REPO_DIR)
 # --- end calls SQL ---
 
 mcp = FastMCP("code-search")
@@ -313,7 +352,8 @@ def _freshness(db: sqlite3.Connection, repos: set[str]) -> str:
     if meta.get("generator"):
         head += f" (generator {meta['generator']})"
     parts = [f"{repo} @ {(sha or '?')[:12]} ({at or '?'})" for repo, sha, at in rows]
-    return head + ("; " + ", ".join(parts) if parts else "")
+    return (head + ("; " + ", ".join(parts) if parts else "")
+            + code_note(STARTED_REV, REPO_DIR))
 
 
 @mcp.tool()
@@ -437,7 +477,8 @@ def semantic_code_search(query: str, k: int = 8, repo: str = "") -> str:
         snippet = "\n".join(text.split("\n")[:25])
         out.append(f"{block}\n```{lang}\n{snippet}\n```")
     updated = db.execute("SELECT value FROM meta WHERE key='updated_at'").fetchone()
-    out.append(f"index updated_at: {updated[0] if updated else 'unknown'}")
+    out.append(f"index updated_at: {updated[0] if updated else 'unknown'}"
+               + code_note(STARTED_REV, REPO_DIR))
     return "\n\n".join(out)
 
 

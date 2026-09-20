@@ -27,12 +27,25 @@ pip は setup-python の cache、埋め込みモデル(~150MB)は actions/cache 
 
 ## MCP server のセットアップ(常駐マシン)
 
+**このマシンに既にある clone を使う。MCP のために 2 つ目を作らない** —
+2 つ目の clone は誰も pull しないので黙ってズレる(実測: 2 PR 遅れたまま
+動いていた)。venv は repo の外に置けば、clone はふつうの checkout のままで、
+各マシンの既存の同期手段がそのまま効く。
+
 ```bash
-git clone https://github.com/ippoan/code-search-index.git
-cd code-search-index
-python3 -m venv venv && venv/bin/pip install -r mcp/requirements.txt
-claude mcp add code-search -- $PWD/venv/bin/python $PWD/mcp/server.py
+cd <この repo の clone>
+python3 -m venv ~/.venvs/code-search
+~/.venvs/code-search/bin/pip install -r mcp/requirements.txt
+claude mcp add -s user code-search -- ~/.venvs/code-search/bin/python $PWD/mcp/server.py
 ```
+
+push 時の重複警告 hook (`scripts/pre-push-similar.sh`) も使うなら、同じ venv に
+`requirements.txt` も入れる(`mcp/requirements.txt` だけでは `indexer` を
+import できない)。別の interpreter を使うなら `CODE_SEARCH_PY` で指す。
+
+server は起動時に読んだコードで動き続けるので、答えの末尾に自分の revision を
+`code @ <sha>` として添える。clone が先に進んでいれば
+「作業ツリーは <sha> に進んでいます」も付く(セッションを開き直せば新しくなる)。
 
 DB は `~/.cache/code-search-index/` に置かれ、6 時間ごとに Release の
 更新をチェックして差し替える(`CODE_INDEX_REFRESH_SECONDS` で変更可)。
