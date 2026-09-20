@@ -1,0 +1,135 @@
+{
+ "conditions": {
+  "dataset": "dataset.jsonl",
+  "label_rule": "chunk's file was changed by the commit (file-level, no line overlap)",
+  "query_rule": "commit subject, merges/bumps/reverts dropped, <=10 indexed files touched",
+  "candidates_per_query": 30.0,
+  "split_rule": "commit-date quantile 0.8 (test is newer)",
+  "trained_on_queries_with_positive_only": true,
+  "features_dropped": [],
+  "train": {
+   "split": "train",
+   "queries": 1007,
+   "repos": 18,
+   "candidates": 30210,
+   "positives": 5150,
+   "positive_rate": 0.1705,
+   "first_commit": "2026-02-21",
+   "last_commit": "2026-09-04"
+  },
+  "test": {
+   "split": "test",
+   "queries": 252,
+   "repos": 12,
+   "candidates": 7560,
+   "positives": 1646,
+   "positive_rate": 0.2177,
+   "first_commit": "2026-09-04",
+   "last_commit": "2026-09-19"
+  }
+ },
+ "model": {
+  "features": [
+   "cos",
+   "distance",
+   "rank",
+   "cos_gap_top",
+   "cos_z",
+   "cos_top1",
+   "same_repo",
+   "path_depth",
+   "path_overlap",
+   "symbol_overlap",
+   "has_symbol",
+   "log_text_len",
+   "is_code_lang",
+   "is_excluded_path",
+   "same_file_frac"
+  ],
+  "trees": 38,
+  "best_iteration": 38,
+  "train_seconds": 0.23,
+  "threshold": 0.3661,
+  "train_f1_at_threshold": 0.8188,
+  "export_bytes": 88805,
+  "lightgbm_vs_exported_max_abs_diff": 2.220446049250313e-16
+ },
+ "timing": {
+  "candidates_scored": 7560,
+  "us_per_candidate": 5.9,
+  "ms_per_query": 0.176,
+  "note": "pure-Python ranker.predict.Forest, one thread, 30.0 candidates per query"
+ },
+ "test": {
+  "model": {
+   "threshold": 0.3661,
+   "precision": 0.745,
+   "recall": 0.7491,
+   "f1": 0.747,
+   "selected": 1655,
+   "pr_auc": 0.8228,
+   "ndcg@5": 0.8204,
+   "p@5": 0.6095,
+   "ndcg@10": 0.8404,
+   "p@10": 0.4683
+  },
+  "baseline_cos": {
+   "threshold": 0.5893,
+   "precision": 0.3043,
+   "recall": 0.6045,
+   "f1": 0.4048,
+   "selected": 3270,
+   "pr_auc": 0.3429,
+   "ndcg@5": 0.4675,
+   "p@5": 0.3754,
+   "ndcg@10": 0.5023,
+   "p@10": 0.3147
+  },
+  "baseline_repo": {
+   "precision": 0.4154,
+   "recall": 1.0,
+   "f1": 0.587,
+   "selected": 3962,
+   "ndcg@5": 0.5469,
+   "p@5": 0.504,
+   "ndcg@10": 0.6104,
+   "p@10": 0.404
+  },
+  "baseline_repo_and_cos": {
+   "threshold": 0.4774,
+   "precision": 0.415,
+   "recall": 0.9787,
+   "f1": 0.5829,
+   "selected": 3882,
+   "pr_auc": 0.5078,
+   "ndcg@5": 0.69,
+   "p@5": 0.504,
+   "ndcg@10": 0.7237,
+   "p@10": 0.404
+  },
+  "baseline_cos_similar_py": {
+   "threshold": 0.93,
+   "precision": 0.0,
+   "recall": 0.0,
+   "f1": 0.0,
+   "selected": 0
+  }
+ },
+ "feature_gain": {
+  "same_repo": 66256.4,
+  "is_excluded_path": 20513.9,
+  "same_file_frac": 14484.1,
+  "path_overlap": 9432.2,
+  "cos_top1": 4669.6,
+  "log_text_len": 3191.3,
+  "path_depth": 3097.2,
+  "cos_gap_top": 1541.4,
+  "cos_z": 961.6,
+  "cos": 536.5,
+  "is_code_lang": 513.0,
+  "distance": 404.3,
+  "rank": 262.7,
+  "symbol_overlap": 210.2,
+  "has_symbol": 188.5
+ }
+}

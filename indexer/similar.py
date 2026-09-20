@@ -16,12 +16,12 @@ import argparse
 import os
 import re
 import sqlite3
-import struct
 import subprocess
 import sys
 
 from . import chunker
-from .db import DIMS, MODEL_NAME
+from .db import MODEL_NAME
+from .search import open_index, search
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -71,29 +71,12 @@ def changed_chunks(ranges: dict[str, list[tuple[int, int]]]) -> list:
     return items
 
 
-def open_index(path: str) -> sqlite3.Connection:
-    db = sqlite3.connect(path)
-    db.enable_load_extension(True)
-    import sqlite_vec
-    sqlite_vec.load(db)
-    db.enable_load_extension(False)
-    return db
-
-
 def nearest_foreign(db: sqlite3.Connection, vec, own_repo: str):
     """Best match outside own_repo: (repo, path, start, end, symbol, cos_sim)."""
-    rows = db.execute(
-        "SELECT c.repo, c.path, c.start_line, c.end_line, c.symbol, v.distance "
-        "FROM (SELECT rowid, distance FROM vec_chunks WHERE embedding MATCH ? "
-        "      ORDER BY distance LIMIT 20) v JOIN chunks c ON c.id = v.rowid "
-        "ORDER BY v.distance",
-        (struct.pack(f"{DIMS}f", *vec),),
-    ).fetchall()
-    for repo, path, s, e, sym, dist in rows:
-        if repo == own_repo:
+    for h in search(db, vec, k=20):
+        if h.repo == own_repo:
             continue
-        # vectors are L2-normalised, so dist^2 = 2 - 2*cos
-        return repo, path, s, e, sym, 1.0 - (dist * dist) / 2.0
+        return h.repo, h.path, h.start_line, h.end_line, h.symbol, h.cos
     return None
 
 
