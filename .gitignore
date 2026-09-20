@@ -4,3 +4,7 @@ __pycache__/
 *.db-*
 *.db.gz
 .repos/
+
+# mined training data never gets committed (commit subjects, see CLAUDE.md);
+# ranker/model.json and ranker/report.json are checked in on purpose.
+*.jsonl

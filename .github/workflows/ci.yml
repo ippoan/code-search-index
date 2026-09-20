@@ -20,7 +20,9 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        # requirements-ml.txt is only for the ranker prototype and its tests;
+        # the index jobs (index.yml / full-rebuild.yml) must not install it.
+        run: pip install -r requirements.txt -r requirements-ml.txt pytest
 
       - name: Run tests
         run: python -m pytest -q
