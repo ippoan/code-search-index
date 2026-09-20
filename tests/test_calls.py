@@ -48,6 +48,15 @@ SYMBOLS = [
      "src/lib.rs", 100, 120),
     (6, "ippoan/alpha", "scip:alpha Repo#", "Repo", "trait",
      "src/repo.rs", 8, 25),
+    # trait / impl / module — the shape measured in rust-alc-api
+    (7, "ippoan/alpha", "scip:alpha `r2`/", "r2", "module",
+     "src/r2.rs", 1, 150),
+    (8, "ippoan/alpha", "scip:alpha StorageBackend#download().", "download",
+     "trait_method", "src/storage.rs", 39, 41),
+    (9, "ippoan/alpha", "scip:alpha R2Backend#download().", "download",
+     "method", "src/r2.rs", 88, 95),
+    (10, "ippoan/alpha", "scip:alpha user().", "user", "function",
+     "src/user.rs", 10, 20),
 ]
 
 # symbol_id, repo, path, line, enclosing_symbol_id, role
@@ -62,6 +71,12 @@ REFS = [
     (6, "ippoan/alpha", "src/router.rs", 12, 2, "reference"),
     # a reference outside any definition -> file scope
     (2, "ippoan/alpha", "src/main.rs", 3, None, "reference"),
+    # R2Backend::download implements StorageBackend::download
+    (8, "ippoan/alpha", "src/r2.rs", 88, 9, "implementation"),
+    # the call site resolves to the trait method, never to the impl
+    (8, "ippoan/alpha", "src/user.rs", 15, 10, "reference"),
+    # `use` of the module spanning the file — noise a line range must not pull in
+    (7, "ippoan/alpha", "src/lib.rs", 7, None, "reference"),
 ]
 
 
@@ -114,8 +129,8 @@ def test_repo_filter_narrows_the_definition_not_the_callers(db):
 def test_path_and_line_route_finds_the_definition_at_those_lines(db):
     res = calls.find_callers(db, path="src/repo.rs", lines="12-14")
 
-    assert [t.name for t in res.targets] == ["Repo", "save"]  # trait + method
-    # router.rs:12 references both matched definitions -> one caller row
+    # the enclosing trait (8-25) is dropped: the innermost match is the answer
+    assert [t.name for t in res.targets] == ["save"]
     assert [c.location for c in res.callers] == [
         "ippoan/alpha/src/router.rs:12",
         "ippoan/alpha/src/sql.rs:41",
@@ -126,6 +141,12 @@ def test_path_and_line_route_finds_the_definition_at_those_lines(db):
 def test_path_route_without_lines_takes_the_whole_file(db):
     res = calls.find_callers(db, path="src/repo.rs")
     assert {t.name for t in res.targets} == {"Repo", "save"}
+    # router.rs:12 references both matched definitions -> one caller row
+    assert [c.location for c in res.callers] == [
+        "ippoan/alpha/src/router.rs:12",
+        "ippoan/alpha/src/sql.rs:41",
+        "ippoan/beta/src/lib.rs:105",
+    ]
 
 
 def test_single_line_and_out_of_range_lines(db):
@@ -214,6 +235,47 @@ def test_cli_without_a_db_says_so(tmp_path):
 
 def test_cli_exit_1_when_nothing_matches(tmp_path, db):
     _cli("--db", str(tmp_path / "calls.db"), "--symbol", "nope", expect=1)
+
+
+def test_asking_about_a_concrete_impl_follows_the_trait(db):
+    """The call grep cannot see, and neither could one hop: references land on
+    the implemented member, so the impl itself has none of its own."""
+    res = calls.find_callers(db, path="src/r2.rs", lines="88-95")
+
+    assert [(t.location, t.via_impl) for t in res.targets] == [
+        ("ippoan/alpha/src/r2.rs:88", False),        # what was asked about
+        ("ippoan/alpha/src/storage.rs:39", True),    # what calls resolve to
+    ]
+    assert [(c.location, c.role) for c in res.callers] == [
+        ("ippoan/alpha/src/r2.rs:88", "implementation"),
+        ("ippoan/alpha/src/user.rs:15", "reference"),
+    ]
+    assert "実装元" in calls.format_result(res, "path=src/r2.rs:88-95")
+
+
+def test_a_line_range_drops_the_module_spanning_the_file(db):
+    """Without this, asking about one method answers with every `use` of the
+    module it lives in — noise that crowds out the real callers."""
+    res = calls.find_callers(db, path="src/r2.rs", lines="88-95")
+    assert "r2" not in {t.name for t in res.targets}
+    assert "ippoan/alpha/src/lib.rs:7" not in {c.location for c in res.callers}
+
+
+def test_without_lines_the_whole_file_still_includes_the_module(db):
+    res = calls.find_callers(db, path="src/r2.rs")
+    assert "r2" in {t.name for t in res.targets}
+    assert "ippoan/alpha/src/lib.rs:7" in {c.location for c in res.callers}
+
+
+def test_the_hop_does_not_duplicate_an_already_matched_target(db):
+    res = calls.find_callers(db, symbol="download")  # matches trait AND impl
+    assert len(res.targets) == len({t.id for t in res.targets}) == 2
+
+
+def test_plain_references_do_not_pull_in_extra_targets(db):
+    """Only role='implementation' rows hop; an ordinary reference must not."""
+    res = calls.find_callers(db, symbol="handler")
+    assert [t.name for t in res.targets] == ["handler"]
 
 
 # --- drift guard -----------------------------------------------------------

@@ -88,9 +88,21 @@ find_callers(symbol="save", repo="ippoan/auth-worker") # 定義を repo で絞�
 ```
 
 返すのは呼び出し元の `repo/path:line`・それを囲む定義の名前・role
-(reference / implementation / type_definition)、そして**鮮度**
+(実測では `reference` と `implementation` の 2 値)、そして**鮮度**
 (各 repo の `commit_sha` と `meta.updated_at`) — いつ・どの木から作られた答えかを
-必ず添える。MCP tool が遅延ロードで見えないときは同じ検索を CLI から叩ける:
+必ず添える。
+
+**trait/interface 越しは 1 ホップ辿る。** 呼び出しは実装された側 (trait method)
+に解決されるので、具象 impl の refs は 0 件になる。impl を指定されたら
+`role='implementation'` の行を辿って実装元を対象に足す (実測: `R2Backend::download`
+単体では 0 件、実装元の `StorageBackend::download` 経由で 8 crate 38 件)。
+
+**`lines` を付けたら、その範囲を含む一番内側の定義だけを対象にする。** ファイル全体に
+またがる module/class も範囲に重なるが、その参照は「そのモジュールを `use` した箇所」
+であって、聞かれた関数の呼び出し元ではないため。`lines` 無し (= ファイル全体) なら
+広い定義も残す。
+
+MCP tool が遅延ロードで見えないときは同じ検索を CLI から叩ける:
 
 ```bash
 python -m indexer.calls --symbol resolve_tenant
