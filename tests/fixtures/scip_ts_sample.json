@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "tool_info": {"name": "scip-typescript", "version": "0.4.0"},
+    "project_root": "file:///repo",
+    "text_document_encoding": 1
+  },
+  "documents": [
+    {
+      "relative_path": "src/lib/html.ts",
+      "symbols": [
+        {"symbol": "scip-typescript npm demo 1.0.0 src/lib/`html.ts`/escapeHtml().", "documentation": ["```ts\nfunction escapeHtml\n```"]},
+        {"symbol": "scip-typescript npm demo 1.0.0 src/lib/`html.ts`/Dog#sound().", "relationships": [{"symbol": "scip-typescript npm demo 1.0.0 src/lib/`html.ts`/Animal#sound().", "is_implementation": true, "is_reference": true}]}
+      ],
+      "occurrences": [
+        {"range": [0, 0, 20, 0], "symbol": "scip-typescript npm demo 1.0.0 src/lib/`html.ts`/", "symbol_roles": 1, "enclosing_range": [0, 0, 20, 0]},
+        {"range": [2, 9, 19], "symbol": "scip-typescript npm demo 1.0.0 src/lib/`html.ts`/escapeHtml().", "symbol_roles": 1, "enclosing_range": [2, 0, 5, 1]},
+        {"range": [3, 10, 17], "symbol": "scip-typescript npm typescript 5.9.3 lib/`lib.es5.d.ts`/String#replace().", "symbol_roles": 0},
+        {"range": [8, 10, 17], "symbol": "scip-typescript npm demo 1.0.0 src/lib/`html.ts`/Animal#sound().", "symbol_roles": 1, "enclosing_range": [8, 2, 17]},
+        {"range": [12, 9, 14], "symbol": "scip-typescript npm demo 1.0.0 src/lib/`html.ts`/Dog#sound().", "symbol_roles": 1, "enclosing_range": [12, 2, 14, 3]}
+      ]
+    }
+  ]
+}

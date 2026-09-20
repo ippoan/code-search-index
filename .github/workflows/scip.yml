@@ -1,0 +1,159 @@
+name: scip
+
+# Builds the call-graph index (`calls.db`) from SCIP and publishes it as a
+# second asset on the `index` release. Deliberately NOT on the daily cron
+# yet: generation needs a real toolchain per language (node_modules for TS,
+# a cargo checkout plus rust-analyzer for Rust), which is a different shape
+# of job from the blob-less clones `index.yml` uses.
+#
+# `code-index.db.gz` is owned by index.yml / full-rebuild.yml and is never
+# touched here — only `calls.db.gz` is uploaded, with --clobber.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scip
+  cancel-in-progress: false
+
+env:
+  # sourcegraph/scip CLI. `go install` cannot build it (its go.mod carries a
+  # replace directive), so take the released linux binary and check it.
+  SCIP_VERSION: v0.10.0
+  SCIP_SHA256: eeb28ebbff443c01609fb1691809958f3f0c7a8651af689a5bc8560061cd8ab0
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: ippoan/auth-worker
+            slug: auth-worker
+            lang: ts
+          - repo: ippoan/rust-alc-api
+            slug: rust-alc-api
+            lang: rust
+    steps:
+      # indexer/gitsync.py is not usable here: it clones with
+      # --filter=blob:none --single-branch and drops node_modules, which is
+      # enough to chunk text but not to run a type-resolving indexer.
+      - name: Check out ${{ matrix.repo }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: target
+
+      - name: Install scip CLI
+        run: |
+          curl -fsSL -o scip.tar.gz \
+            "https://github.com/sourcegraph/scip/releases/download/${SCIP_VERSION}/scip-linux-amd64.tar.gz"
+          echo "${SCIP_SHA256}  scip.tar.gz" | sha256sum -c -
+          tar xzf scip.tar.gz scip
+          sudo install -m 0755 scip /usr/local/bin/scip
+
+      - uses: actions/setup-node@v4
+        if: matrix.lang == 'ts'
+        with:
+          node-version: "24"
+
+      # Best-effort: @ippoan/* comes from GitHub Packages and this repo's
+      # token may not be able to read it. Measured on auth-worker, a failed
+      # install costs only references into external .d.ts files — references
+      # to the repo's own src/ symbols are identical either way — so a
+      # failure here degrades the index instead of failing the run.
+      - name: Install node dependencies (best effort)
+        if: matrix.lang == 'ts'
+        working-directory: target
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # npm expands ${NODE_AUTH_TOKEN} in .npmrc at read time, so the
+          # token is never written to disk. The @ippoan registry line is
+          # already in the checked-out .npmrc.
+          printf '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n' >> .npmrc
+          npm ci || npm install --no-audit --no-fund || echo "continuing without node_modules"
+
+      - name: Generate SCIP (TypeScript)
+        if: matrix.lang == 'ts'
+        working-directory: target
+        run: npx --yes @sourcegraph/scip-typescript@latest index --output ../index.scip
+
+      # ubuntu-latest ships rustup, but the rust-analyzer shim errors out
+      # until the component is installed.
+      - name: Generate SCIP (Rust)
+        if: matrix.lang == 'rust'
+        working-directory: target
+        run: |
+          rustup component add rust-analyzer
+          cargo fetch
+          rust-analyzer scip . --output ../index.scip
+
+      - name: Convert to JSON
+        run: |
+          scip print --json index.scip > "${{ matrix.slug }}.json"
+          printf '%s' "${{ matrix.repo }}" > "${{ matrix.slug }}.repo"
+          git -C target rev-parse HEAD > "${{ matrix.slug }}.commit"
+          ls -l "${{ matrix.slug }}.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scip-${{ matrix.slug }}
+          path: |
+            ${{ matrix.slug }}.json
+            ${{ matrix.slug }}.repo
+            ${{ matrix.slug }}.commit
+          retention-days: 3
+
+  publish:
+    needs: index
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: scip-*
+          path: scip
+          merge-multiple: true
+
+      # indexer.scip is stdlib-only, so this job installs nothing.
+      - name: Build calls.db
+        run: |
+          for f in scip/*.json; do
+            slug=$(basename "$f" .json)
+            python -m indexer.scip --db calls.db \
+              --repo "$(cat "scip/$slug.repo")" \
+              --commit "$(cat "scip/$slug.commit")" \
+              --json "$f"
+          done
+          python -c "import sqlite3; sqlite3.connect('calls.db').execute('VACUUM')"
+          gzip -kf9 calls.db
+          ls -l calls.db calls.db.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calls-db
+          path: calls.db.gz
+          retention-days: 14
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view index >/dev/null 2>&1 || \
+            gh release create index --title "code search index" \
+              --notes "Auto-built semantic code search index (sqlite-vec, jina-embeddings-v2-base-code)"
+          gh release upload index calls.db.gz --clobber
