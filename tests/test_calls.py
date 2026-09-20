@@ -278,11 +278,75 @@ def test_plain_references_do_not_pull_in_extra_targets(db):
     assert [t.name for t in res.targets] == ["handler"]
 
 
+# --- which revision answered ---------------------------------------------
+# mcp/server.py cannot be imported here (the mcp SDK is not a test dependency),
+# so these run against the indexer copy; the drift guard below is what keeps
+# the server's copy identical.
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init", "-q")
+    _git(path, "config", "user.email", "t@example.com")
+    _git(path, "config", "user.name", "t")
+    (path / "f.txt").write_text("x\n")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "base")
+    return subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=path,
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_head_rev_reads_the_checked_out_revision(tmp_path):
+    sha = _repo(tmp_path / "repo")
+    assert calls.head_rev(str(tmp_path / "repo")) == sha
+    assert len(sha) == 12
+
+
+def test_head_rev_inside_a_worktree(tmp_path):
+    """A worktree's .git is a file, not a directory — the case that made
+    hand-rolled .git parsing return nothing."""
+    repo = tmp_path / "repo"
+    _repo(repo)
+    _git(repo, "worktree", "add", "-q", "-b", "side", str(tmp_path / "wt"))
+    assert (tmp_path / "wt" / ".git").is_file()
+    assert calls.head_rev(str(tmp_path / "wt")) != ""
+
+
+def test_head_rev_is_empty_outside_a_checkout(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert calls.head_rev(str(plain)) == ""
+
+
+def test_code_note_states_the_running_revision(tmp_path):
+    sha = _repo(tmp_path / "repo")
+    assert calls.code_note(sha, str(tmp_path / "repo")) == f"; code @ {sha}"
+
+
+def test_code_note_flags_a_checkout_that_moved_past_the_process(tmp_path):
+    sha = _repo(tmp_path / "repo")
+    note = calls.code_note("0123456789ab", str(tmp_path / "repo"))
+    assert "0123456789ab" in note and sha in note
+    assert "開き直す" in note  # what the reader has to do about it
+
+
+def test_code_note_says_nothing_when_the_revision_is_unknown(tmp_path):
+    assert calls.code_note("", str(tmp_path)) == ""
+
+
+def test_freshness_carries_the_code_revision(db):
+    text = calls.format_result(calls.find_callers(db, symbol="save"), "symbol=save")
+    assert "; code @ " in text  # the answer says which code produced it
+
+
 # --- drift guard -----------------------------------------------------------
 # mcp/server.py cannot import indexer (see the module docstrings), so it keeps
 # its own copy of the SQL. Read both files as text and require the blocks to be
 # identical — a change to one side without the other fails here.
-SQL_START = "# --- calls SQL"
+SQL_START = "# --- shared block:"
 SQL_END = "# --- end calls SQL ---"
 
 
