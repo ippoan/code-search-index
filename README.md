@@ -25,32 +25,6 @@ ippoan の **public repo 横断・意味検索(セマンティックコード検
 pip は setup-python の cache、埋め込みモデル(~150MB)は actions/cache で
 キャッシュされるため、2 回目以降の run はダウンロードなしで始まる。
 
-## 呼び出し関係 (calls.db)
-
-意味検索の索引は「定義の目録」なので、trait 越しや dispatch table 経由の
-**呼び出し**は答えられない。それを埋めるのが SCIP 由来の `calls.db` で、
-同じ Release `index` に **`calls.db.gz` という別 asset**として置かれる
-(`code-index.db.gz` とは独立。互いに触らない)。
-
-```
-.github/workflows/scip.yml    workflow_dispatch のみ (日次 cron には未搭載)
-  ├─ 対象 repo を actions/checkout して依存を入れる
-  │    TS   : npm ci → npx @sourcegraph/scip-typescript index
-  │    Rust : rustup component add rust-analyzer → rust-analyzer scip .
-  ├─ scip CLI (release binary, sha256 検証) で `scip print --json`
-  ├─ python -m indexer.scip で symbols / refs に ingest (indexer/scip.py)
-  └─ gzip して Release asset `calls.db.gz` を --clobber で差し替え
-```
-
-`refs.enclosing_symbol_id` が索引の中心で、**参照を囲む定義 = 呼び出し元**。
-SCIP の Occurrence が持つ `enclosing_range` (定義の本体範囲) と参照位置を
-突き合わせて決める。ローカルで作るには:
-
-```bash
-scip print --json index.scip > auth-worker.json
-python -m indexer.scip --repo ippoan/auth-worker --json auth-worker.json --db calls.db
-```
-
 ## MCP server のセットアップ(常駐マシン)
 
 ```bash
@@ -75,11 +49,16 @@ MCP を介さず手動で最新 DB をローカルへ同期するには:
 バイト列は捨てて前回のファイルを維持する。未公開の asset は skip するだけで
 失敗にはしない。`mcp/server.py` も同じ検証を通して同じキャッシュを読む。
 
-## 呼び出し関係 (find_callers)
+## 呼び出し関係 (calls.db / find_callers)
 
-grep は trait 越し・Router 経由の呼び出しを取りこぼす。`calls.db`
-(Release asset `calls.db.gz`、SCIP 抽出ジョブが生成) を引いて**呼び出し元**を
-列挙する MCP tool が `find_callers`:
+意味検索の索引は「定義の目録」なので、trait 越しや dispatch table 経由の
+**呼び出し**は答えられない。それを埋めるのが SCIP 由来の `calls.db` で、
+同じ Release `index` に **`calls.db.gz` という別 asset**として置かれる
+(`code-index.db.gz` とは独立。互いに触らない)。
+
+### 引く (find_callers)
+
+`calls.db` を引いて**呼び出し元**を列挙する MCP tool が `find_callers`:
 
 ```
 find_callers(symbol="resolve_tenant")                  # 定義の名前で
@@ -88,7 +67,8 @@ find_callers(symbol="save", repo="ippoan/auth-worker") # 定義を repo で絞�
 ```
 
 返すのは呼び出し元の `repo/path:line`・それを囲む定義の名前・role
-(実測では `reference` と `implementation` の 2 値)、そして**鮮度**
+(`reference` / `implementation`。`type_definition` は列としては在るが、
+現状の 2 repo では 0 件 — どちらの indexer も出さない)、そして**鮮度**
 (各 repo の `commit_sha` と `meta.updated_at`) — いつ・どの木から作られた答えかを
 必ず添える。
 
@@ -111,6 +91,27 @@ python -m indexer.calls --path indexer/db.py --lines 11-20 --json
 
 `calls.db` がまだ Release に無い間、tool は落ちずに「呼び出し関係の索引が
 まだありません」と返す。
+
+### 作る (.github/workflows/scip.yml)
+
+```
+workflow_dispatch のみ (日次 cron には未搭載)
+  ├─ 対象 repo を actions/checkout して依存を入れる
+  │    TS   : npm ci → npx @sourcegraph/scip-typescript index
+  │    Rust : rustup component add rust-analyzer → rust-analyzer scip .
+  ├─ scip CLI (release binary, sha256 検証) で `scip print --json`
+  ├─ python -m indexer.scip で symbols / refs に ingest (indexer/scip.py)
+  └─ gzip して Release asset `calls.db.gz` を --clobber で差し替え
+```
+
+`refs.enclosing_symbol_id` が索引の中心で、**参照を囲む定義 = 呼び出し元**。
+SCIP の Occurrence が持つ `enclosing_range` (定義の本体範囲) と参照位置を
+突き合わせて決める。ローカルで作るには:
+
+```bash
+scip print --json index.scip > auth-worker.json
+python -m indexer.scip --repo ippoan/auth-worker --json auth-worker.json --db calls.db
+```
 
 ## 手動再構築
 
