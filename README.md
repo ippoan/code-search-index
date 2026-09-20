@@ -25,6 +25,32 @@ ippoan の **public repo 横断・意味検索(セマンティックコード検
 pip は setup-python の cache、埋め込みモデル(~150MB)は actions/cache で
 キャッシュされるため、2 回目以降の run はダウンロードなしで始まる。
 
+## 呼び出し関係 (calls.db)
+
+意味検索の索引は「定義の目録」なので、trait 越しや dispatch table 経由の
+**呼び出し**は答えられない。それを埋めるのが SCIP 由来の `calls.db` で、
+同じ Release `index` に **`calls.db.gz` という別 asset**として置かれる
+(`code-index.db.gz` とは独立。互いに触らない)。
+
+```
+.github/workflows/scip.yml    workflow_dispatch のみ (日次 cron には未搭載)
+  ├─ 対象 repo を actions/checkout して依存を入れる
+  │    TS   : npm ci → npx @sourcegraph/scip-typescript index
+  │    Rust : rustup component add rust-analyzer → rust-analyzer scip .
+  ├─ scip CLI (release binary, sha256 検証) で `scip print --json`
+  ├─ python -m indexer.scip で symbols / refs に ingest (indexer/scip.py)
+  └─ gzip して Release asset `calls.db.gz` を --clobber で差し替え
+```
+
+`refs.enclosing_symbol_id` が索引の中心で、**参照を囲む定義 = 呼び出し元**。
+SCIP の Occurrence が持つ `enclosing_range` (定義の本体範囲) と参照位置を
+突き合わせて決める。ローカルで作るには:
+
+```bash
+scip print --json index.scip > auth-worker.json
+python -m indexer.scip --repo ippoan/auth-worker --json auth-worker.json --db calls.db
+```
+
 ## MCP server のセットアップ(常駐マシン)
 
 ```bash

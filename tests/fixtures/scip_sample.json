@@ -1,0 +1,51 @@
+{
+  "metadata": {
+    "tool_info": {"name": "rust-analyzer", "version": "test"},
+    "project_root": "file:///repo",
+    "text_document_encoding": 1
+  },
+  "documents": [
+    {
+      "relative_path": "src/storage.rs",
+      "symbols": [
+        {"symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#", "kind": 53, "display_name": "StorageBackend"},
+        {"symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#download().", "kind": 70, "display_name": "download"},
+        {"symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#upload().", "kind": 70, "display_name": "upload"}
+      ],
+      "occurrences": [
+        {"range": [0, 0, 9, 0], "symbol": "rust-analyzer cargo demo 0.1.0 storage/", "symbol_roles": 1, "enclosing_range": [0, 0, 9, 0]},
+        {"range": [0, 10, 24], "symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#", "symbol_roles": 1, "enclosing_range": [0, 0, 5, 1]},
+        {"range": [1, 13, 19], "symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#upload().", "symbol_roles": 1, "enclosing_range": [1, 4, 19]},
+        {"range": [3, 13, 21], "symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#download().", "symbol_roles": 1, "enclosing_range": [3, 4, 21]}
+      ]
+    },
+    {
+      "relative_path": "src/r2.rs",
+      "symbols": [
+        {"symbol": "rust-analyzer cargo demo 0.1.0 r2/impl#[R2Backend][StorageBackend]upload().", "kind": 26, "display_name": "upload"},
+        {"symbol": "rust-analyzer cargo demo 0.1.0 r2/impl#[R2Backend][StorageBackend]download().", "kind": 26, "display_name": "download"}
+      ],
+      "occurrences": [
+        {"range": [0, 0, 30, 0], "symbol": "rust-analyzer cargo demo 0.1.0 r2/", "symbol_roles": 1, "enclosing_range": [0, 0, 30, 0]},
+        {"range": [3, 13, 19], "symbol": "rust-analyzer cargo demo 0.1.0 r2/impl#[R2Backend][StorageBackend]upload().", "symbol_roles": 1, "enclosing_range": [2, 0, 20, 1]},
+        {"range": [5, 8, 19], "symbol": "rust-analyzer cargo demo 0.1.0 net/Client#put().", "symbol_roles": 0},
+        {"range": [10, 13, 21], "symbol": "rust-analyzer cargo demo 0.1.0 r2/impl#[R2Backend][StorageBackend]download().", "symbol_roles": 1, "enclosing_range": [2, 0, 20, 1]},
+        {"range": [11, 8, 12], "symbol": "local 0", "symbol_roles": 1, "enclosing_range": [11, 8, 12]},
+        {"range": [12, 8, 19], "symbol": "rust-analyzer cargo demo 0.1.0 net/Client#get().", "symbol_roles": 0},
+        {"range": [13, 8, 12], "symbol": "local 0", "symbol_roles": 0}
+      ]
+    },
+    {
+      "relative_path": "src/app.rs",
+      "symbols": [
+        {"symbol": "rust-analyzer cargo demo 0.1.0 app/fetch_blob().", "kind": 17, "display_name": "fetch_blob"}
+      ],
+      "occurrences": [
+        {"range": [0, 0, 12, 0], "symbol": "rust-analyzer cargo demo 0.1.0 app/", "symbol_roles": 1, "enclosing_range": [0, 0, 12, 0]},
+        {"range": [2, 7, 17], "symbol": "rust-analyzer cargo demo 0.1.0 app/fetch_blob().", "symbol_roles": 1, "enclosing_range": [2, 0, 6, 1]},
+        {"range": [4, 16, 24], "symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#download().", "symbol_roles": 0},
+        {"range": [9, 4, 12], "symbol": "rust-analyzer cargo demo 0.1.0 storage/StorageBackend#upload().", "symbol_roles": 0}
+      ]
+    }
+  ]
+}
