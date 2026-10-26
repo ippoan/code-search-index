@@ -67,8 +67,15 @@ jobs:
           [ -n "${{ inputs.only }}" ] && FLAGS="$FLAGS --only ${{ inputs.only }}"
           python -m indexer --org ippoan,ohishi-exp --db code-index.db $FLAGS
 
+      # hashFiles() はワークスペース全体を走査するので、clone した repo が多いと
+      # 120 秒で打ち切られて step ごと失敗する (Publish まで飛ぶ)。在るかどうかを 1 回だけ見る
+      - name: Check index file
+        id: files
+        if: ${{ always() }}
+        run: echo "db=$([ -f code-index.db ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       - name: Save checkpoint on failure
-        if: ${{ failure() && hashFiles('code-index.db') != '' }}
+        if: ${{ failure() && steps.files.outputs.db == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -79,11 +86,11 @@ jobs:
           gh release upload index-checkpoint code-index.db.gz --clobber
 
       - name: Compress
-        if: ${{ always() && hashFiles('code-index.db') != '' }}
+        if: ${{ always() && steps.files.outputs.db == 'true' }}
         run: gzip -kf code-index.db
 
       - name: Upload artifact copy
-        if: ${{ always() && hashFiles('code-index.db.gz') != '' }}
+        if: ${{ always() && steps.files.outputs.db == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: code-index-db
