@@ -10,21 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-import urllib.request
 
-from .gitsync import list_public_repos
+from .gitsync import get_json, list_public_repos
 
 
 def _api(path: str):
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    req = urllib.request.Request(
-        f"https://api.github.com{path}",
-        headers={"Authorization": f"Bearer {token}"} if token else {},
-    )
-    with urllib.request.urlopen(req) as resp:
-        return json.load(resp)
+    return get_json(f"https://api.github.com{path}")
 
 
 def main(argv=None) -> int:
