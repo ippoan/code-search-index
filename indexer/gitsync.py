@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
+import urllib.error
 import urllib.request
 
 EXCLUDE_DIR_PARTS = {
@@ -12,18 +14,40 @@ EXCLUDE_DIR_PARTS = {
     "Pods", ".venv", "venv", "generated",
 }
 MAX_FILE_BYTES = 300_000
+API_ATTEMPTS = 5
+API_TIMEOUT = 30
+
+
+def get_json(url: str):
+    """GET a GitHub API URL, retrying 5xx / 429 / network errors with
+    exponential backoff (1, 2, 4, 8 s). A single transient 504 used to fail
+    the whole index run."""
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    req = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {token}"} if token else {},
+    )
+    for attempt in range(API_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 and e.code != 429:
+                raise
+            err = e
+        except (urllib.error.URLError, TimeoutError) as e:
+            err = e
+        if attempt == API_ATTEMPTS - 1:
+            raise err
+        print(f"GET {url} failed ({err}); retry {attempt + 1}", flush=True)
+        time.sleep(2 ** attempt)
 
 
 def list_public_repos(org: str) -> list[str]:
     repos, page = [], 1
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     while True:
-        req = urllib.request.Request(
-            f"https://api.github.com/orgs/{org}/repos?type=public&per_page=100&page={page}",
-            headers={"Authorization": f"Bearer {token}"} if token else {},
+        batch = get_json(
+            f"https://api.github.com/orgs/{org}/repos?type=public&per_page=100&page={page}"
         )
-        with urllib.request.urlopen(req) as resp:
-            batch = json.load(resp)
         if not batch:
             break
         for r in batch:
